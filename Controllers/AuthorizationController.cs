@@ -8,15 +8,24 @@ using OpenIddict.Server.AspNetCore;
 using System.Security.Claims;
 using System.Linq;
 using static OpenIddict.Abstractions.OpenIddictConstants;
+using KarlixID.Web.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace KarlixID.Web.Controllers
 {
     public class AuthorizationController : Controller
     {
+        private readonly ApplicationDbContext _db;
+
+        public AuthorizationController(ApplicationDbContext db)
+        {
+            _db = db;
+        }
+
         // GET/POST /connect/authorize
         [HttpGet("~/connect/authorize"), HttpPost("~/connect/authorize")]
         [IgnoreAntiforgeryToken] // OIDC middleware rješava CSRF
-        public IActionResult Authorize()
+        public async Task<IActionResult> Authorize()
         {
             var request = HttpContext.GetOpenIddictServerRequest()
                           ?? throw new InvalidOperationException("OIDC request unavailable.");
@@ -65,7 +74,7 @@ namespace KarlixID.Web.Controllers
                     .SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
             }
 
-            // 🔹 TENANT CLAIM – NOVO
+            // 🔹 TENANT CLAIM – GUID
             var tenantClaim =
                 User.Claims.FirstOrDefault(c => c.Type == "tenant")
                 ?? User.Claims.FirstOrDefault(c => c.Type == "tenant_id")
@@ -76,6 +85,20 @@ namespace KarlixID.Web.Controllers
                 // U OpenIddict tokene ga zovemo "tenant"
                 identity.AddClaim(new Claim("tenant", tenantClaim.Value)
                     .SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
+
+                // 🔹 TENANT NAME – ako postoji u bazi i nije Guid.Empty, dodaj i "tenant_name"
+                if (Guid.TryParse(tenantClaim.Value, out var tenantId) && tenantId != Guid.Empty)
+                {
+                    var tenantEntity = await _db.Tenants
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(t => t.Id == tenantId);
+
+                    if (tenantEntity is not null && !string.IsNullOrWhiteSpace(tenantEntity.Name))
+                    {
+                        identity.AddClaim(new Claim("tenant_name", tenantEntity.Name)
+                            .SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
+                    }
+                }
             }
 
             // Scope-ovi iz zahtjeva ili default
@@ -90,12 +113,15 @@ namespace KarlixID.Web.Controllers
             return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         }
 
-        // POST /connect/logout (optional – ako ti treba vlastiti endpoint)
-        [HttpPost("~/connect/logout")]
-        [ValidateAntiForgeryToken]
+        // POST/GET /connect/logout – end-session endpoint za SSO logout
+        [HttpGet("~/connect/logout"), HttpPost("~/connect/logout")]
+        [IgnoreAntiforgeryToken]
         public async Task<IActionResult> Logout()
         {
+            // Odjava korisnika iz KarlixID (Identity cookie)
             await HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+
+            // OpenIddict server rješava redirect natrag na klijenta (post_logout_redirect_uri)
             return SignOut(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         }
 

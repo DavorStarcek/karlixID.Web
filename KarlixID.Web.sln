@@ -7,6 +7,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KarlixID.Web", "KarlixID.We
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KarlixPortal.Web", "..\KarlixPortal.Web\KarlixPortal.Web.csproj", "{016B962F-ACAE-4FD7-AD6E-C7AAFD28FEE1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KarlixQMS.Web", "..\KarlixQMS.Web\KarlixQMS.Web.csproj", "{ED337ED8-6B43-45DB-9CCD-2F849986452A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KarlixQMS.API", "..\KarlixQMS.API\KarlixQMS.API.csproj", "{5F86787A-FC20-44F6-8F3B-5B75F865F351}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +25,14 @@ Global
 		{016B962F-ACAE-4FD7-AD6E-C7AAFD28FEE1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{016B962F-ACAE-4FD7-AD6E-C7AAFD28FEE1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{016B962F-ACAE-4FD7-AD6E-C7AAFD28FEE1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ED337ED8-6B43-45DB-9CCD-2F849986452A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ED337ED8-6B43-45DB-9CCD-2F849986452A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ED337ED8-6B43-45DB-9CCD-2F849986452A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ED337ED8-6B43-45DB-9CCD-2F849986452A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5F86787A-FC20-44F6-8F3B-5B75F865F351}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5F86787A-FC20-44F6-8F3B-5B75F865F351}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5F86787A-FC20-44F6-8F3B-5B75F865F351}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5F86787A-FC20-44F6-8F3B-5B75F865F351}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

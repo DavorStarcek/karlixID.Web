@@ -83,7 +83,7 @@ builder.Services
     .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
     .SetApplicationName("KarlixID");
 
-// ========= OpenIddict 7.1 =========
+// ========= OpenIddict 7.x =========
 builder.Services.AddOpenIddict()
     .AddCore(options =>
     {
@@ -95,7 +95,9 @@ builder.Services.AddOpenIddict()
         options
             .SetAuthorizationEndpointUris("/connect/authorize")
             .SetTokenEndpointUris("/connect/token")
-            .SetIntrospectionEndpointUris("/connect/introspect");
+            .SetIntrospectionEndpointUris("/connect/introspect")
+            // ⚠️ u novijim verzijama: EndSession umjesto Logout
+            .SetEndSessionEndpointUris("/connect/logout");
 
         options
             .AllowAuthorizationCodeFlow()
@@ -109,8 +111,9 @@ builder.Services.AddOpenIddict()
 
         options.UseAspNetCore()
             .EnableAuthorizationEndpointPassthrough()
-            // ⬇⬇⬇ MAKNUTO, neka OpenIddict sam odgovara na /connect/token
-            // .EnableTokenEndpointPassthrough()
+            // ⚠️ u novijim verzijama: EndSession umjesto Logout
+            .EnableEndSessionEndpointPassthrough()
+            // .EnableTokenEndpointPassthrough() // ostavljamo da OpenIddict sam rješava /connect/token
             .DisableTransportSecurityRequirement(); // DEV only
 
         options.DisableAccessTokenEncryption();
@@ -220,16 +223,20 @@ using (var scope = app.Services.CreateScope())
             },
             PostLogoutRedirectUris =
             {
-                new Uri("https://localhost:5003/")
+                 new Uri("https://localhost:5003/signout-callback-oidc")
             },
             Permissions =
             {
                 Permissions.Endpoints.Authorization,
                 Permissions.Endpoints.Token,
                 Permissions.Endpoints.Introspection,
+                // ⚠️ u novijim verzijama: EndSession umjesto Logout
+                Permissions.Endpoints.EndSession,
+
                 Permissions.GrantTypes.AuthorizationCode,
                 Permissions.GrantTypes.RefreshToken,
                 Permissions.ResponseTypes.Code,
+
                 Scopes.OpenId,
                 Scopes.Profile,
                 Scopes.Email,
@@ -238,6 +245,47 @@ using (var scope = app.Services.CreateScope())
             }
         });
     }
+
+    // ===== Karlix Complaints (Reklamacije) — DEV na https://localhost:5005 =====
+    if (await appManager.FindByClientIdAsync("karlix_qms") is null)
+    {
+        await appManager.CreateAsync(new OpenIddictApplicationDescriptor
+        {
+            ClientId = "karlix_qms",
+            ClientSecret = "super-tajna-rijec-za-dev-qms",
+            DisplayName = "Karlix QMS (Quality Management System)",
+            ClientType = ClientTypes.Confidential,
+            ConsentType = ConsentTypes.Implicit,
+            RedirectUris =
+        {
+            new Uri("https://localhost:5005/signin-oidc")
+        },
+            PostLogoutRedirectUris =
+        {
+            new Uri("https://localhost:5005/")
+        },
+            Permissions =
+        {
+            Permissions.Endpoints.Authorization,
+                Permissions.Endpoints.Token,
+                Permissions.Endpoints.Introspection,
+                // ⚠️ u novijim verzijama: EndSession umjesto Logout
+                Permissions.Endpoints.EndSession,
+
+                Permissions.GrantTypes.AuthorizationCode,
+                Permissions.GrantTypes.RefreshToken,
+                Permissions.ResponseTypes.Code,
+
+                Scopes.OpenId,
+                Scopes.Profile,
+                Scopes.Email,
+                Scopes.Roles,
+                Scopes.OfflineAccess
+        }
+        });
+    }
+
+
 }
 
 app.Run();

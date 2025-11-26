@@ -10,11 +10,17 @@
     {
         if (string.IsNullOrWhiteSpace(tenantName))
             return ("#0d6efd", "#0b5ed7");
+
         switch (tenantName.Trim().ToLowerInvariant())
         {
-            case "tenant local": return ("#10b981", "#059669");
-            case "pik vrbovec plus d.o.o.": return ("#ef4444", "#dc2626");
-            default: return ("#0d6efd", "#0b5ed7");
+            case "global":
+                return ("#0d6efd", "#0b5ed7"); // Global → default brand
+            case "tenant local":
+                return ("#10b981", "#059669");
+            case "pik vrbovec plus d.o.o.":
+                return ("#ef4444", "#dc2626");
+            default:
+                return ("#0d6efd", "#0b5ed7");
         }
     }
 }
@@ -43,10 +49,29 @@
     </script>
 </head>
 @{
-        var tname = HttpCtx.HttpContext?.GetTenantName();
-        tname = string.IsNullOrWhiteSpace(tname)
-                ? (User?.Claims?.FirstOrDefault(c => c.Type == "tenant_name")?.Value)
-                : tname;
+        // === Određivanje prikaza tenanta u headeru ===
+        var isGlobalAdmin = User.IsInRole(AppRoleInfo.GlobalAdmin);
+
+        string? tname = null;
+
+        if (isGlobalAdmin)
+        {
+                // 👑 GlobalAdmin uvijek vidi "Global" bez obzira na host
+                tname = "Global";
+        }
+        else
+        {
+                // 1) tenant_name iz claimova (ako postoji)
+                tname =
+                        User?.Claims?.FirstOrDefault(c => c.Type == "tenant_name")?.Value ??
+                        User?.Claims?.FirstOrDefault(c => c.Type == "tenant:name")?.Value;
+
+                // 2) ako ga nema, padni na hostname-tenant iz middleware-a
+                if (string.IsNullOrWhiteSpace(tname))
+                {
+                        tname = HttpCtx.HttpContext?.GetTenantName();
+                }
+        }
 
         var (brand, brand600) = GetBrandForTenant(tname);
 
@@ -91,7 +116,7 @@
                         </li>
                     }
 
-                    @* NOVO: Pozivnice — dostupno GlobalAdmin i TenantAdmin; pozicionirano odmah nakon Tenanti *@
+                    @* Pozivnice — dostupno GlobalAdmin i TenantAdmin *@
                     @if (User.IsInRole(AppRoleInfo.GlobalAdmin) || User.IsInRole(AppRoleInfo.TenantAdmin))
                     {
                         <li class="nav-item">
