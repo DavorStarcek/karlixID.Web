@@ -10,6 +10,14 @@ using System.Globalization;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
 var builder = WebApplication.CreateBuilder(args);
+var env = builder.Environment;
+var isDev = env.IsDevelopment();
+
+// dodatno: flag za detaljne greške (čita se iz env var)
+var detailedErrorsEnv = Environment.GetEnvironmentVariable("ASPNETCORE_DETAILEDERRORS");
+var showDevErrors =
+    isDev ||
+    string.Equals(detailedErrorsEnv, "true", StringComparison.OrdinalIgnoreCase);
 
 // ========= DB =========
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -71,7 +79,7 @@ builder.Services.AddControllersWithViews()
     .AddDataAnnotationsLocalization();
 builder.Services.AddRazorPages();
 
-// Data Protection ključevi
+// Data Protection ključevi (za sada isto i u DEV i u PROD)
 var keysPath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
     "KarlixID", "keys"
@@ -96,7 +104,6 @@ builder.Services.AddOpenIddict()
             .SetAuthorizationEndpointUris("/connect/authorize")
             .SetTokenEndpointUris("/connect/token")
             .SetIntrospectionEndpointUris("/connect/introspect")
-            // ⚠️ u novijim verzijama: EndSession umjesto Logout
             .SetEndSessionEndpointUris("/connect/logout");
 
         options
@@ -105,17 +112,16 @@ builder.Services.AddOpenIddict()
 
         options.RegisterScopes(Scopes.OpenId, Scopes.Profile, Scopes.Email, Scopes.Roles, Scopes.OfflineAccess);
 
+        // Ephemeral ključevi – ne diraju cert store
         options
-            .AddDevelopmentEncryptionCertificate()
-            .AddDevelopmentSigningCertificate();
+            .AddEphemeralEncryptionKey()
+            .AddEphemeralSigningKey();
 
         options.UseAspNetCore()
             .EnableAuthorizationEndpointPassthrough()
-            // ⚠️ u novijim verzijama: EndSession umjesto Logout
-            .EnableEndSessionEndpointPassthrough()
-            // .EnableTokenEndpointPassthrough() // ostavljamo da OpenIddict sam rješava /connect/token
-            .DisableTransportSecurityRequirement(); // DEV only
+            .EnableEndSessionEndpointPassthrough();
 
+        // Tokeni u plain JWT obliku (lakše debugiranje)
         options.DisableAccessTokenEncryption();
     })
     .AddValidation(options =>
@@ -134,6 +140,19 @@ app.UseRequestLocalization(new RequestLocalizationOptions
     SupportedCultures = supportedCultures,
     SupportedUICultures = supportedCultures
 });
+
+// umjesto if (!isDev) -> koristimo showDevErrors
+if (showDevErrors)
+{
+    // DEV ili ASPNETCORE_DETAILEDERRORS=true → full stack
+    app.UseDeveloperExceptionPage();
+}
+else
+{
+    // klasični production handling
+    app.UseExceptionHandler("/Home/Error");
+    app.UseHsts();
+}
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
@@ -207,85 +226,131 @@ using (var scope = app.Services.CreateScope())
         }
     }
 
-    // ===== Karlix MVC (Portal) — DEV redirecti na https://localhost:5003 =====
-    if (await appManager.FindByClientIdAsync("karlix_mvc") is null)
+    // ===== Karlix MVC (Portal) =====
     {
-        await appManager.CreateAsync(new OpenIddictApplicationDescriptor
+        var existing = await appManager.FindByClientIdAsync("karlix_mvc");
+
+        if (existing is null)
         {
-            ClientId = "karlix_mvc",
-            ClientSecret = "super-tajna-rijec-za-dev",
-            DisplayName = "Karlix MVC (Portal)",
-            ClientType = ClientTypes.Confidential,
-            ConsentType = ConsentTypes.Implicit,
-            RedirectUris =
+            var descriptor = new OpenIddictApplicationDescriptor
             {
-                new Uri("https://localhost:5003/signin-oidc")
-            },
-            PostLogoutRedirectUris =
-            {
-                 new Uri("https://localhost:5003/signout-callback-oidc")
-            },
-            Permissions =
-            {
-                Permissions.Endpoints.Authorization,
-                Permissions.Endpoints.Token,
-                Permissions.Endpoints.Introspection,
-                // ⚠️ u novijim verzijama: EndSession umjesto Logout
-                Permissions.Endpoints.EndSession,
+                ClientId = "karlix_mvc",
+                ClientSecret = "super-tajna-rijec-za-dev", // PROD: promijeni!
+                DisplayName = "Karlix MVC (Portal)",
+                ClientType = ClientTypes.Confidential,
+                ConsentType = ConsentTypes.Implicit,
+                Permissions =
+                {
+                    Permissions.Endpoints.Authorization,
+                    Permissions.Endpoints.Token,
+                    Permissions.Endpoints.Introspection,
+                    Permissions.Endpoints.EndSession,
+                    Permissions.GrantTypes.AuthorizationCode,
+                    Permissions.GrantTypes.RefreshToken,
+                    Permissions.ResponseTypes.Code,
+                    Scopes.OpenId,
+                    Scopes.Profile,
+                    Scopes.Email,
+                    Scopes.Roles,
+                    Scopes.OfflineAccess
+                }
+            };
 
-                Permissions.GrantTypes.AuthorizationCode,
-                Permissions.GrantTypes.RefreshToken,
-                Permissions.ResponseTypes.Code,
+            // Dev redirecti
+            descriptor.RedirectUris.Add(new Uri("https://localhost:5003/signin-oidc"));
+            descriptor.PostLogoutRedirectUris.Add(new Uri("https://localhost:5003/signout-callback-oidc"));
 
-                Scopes.OpenId,
-                Scopes.Profile,
-                Scopes.Email,
-                Scopes.Roles,
-                Scopes.OfflineAccess
-            }
-        });
-    }
+            // Prod redirecti
+            descriptor.RedirectUris.Add(new Uri("https://portal.karlix.eu/signin-oidc"));
+            descriptor.PostLogoutRedirectUris.Add(new Uri("https://portal.karlix.eu/signout-callback-oidc"));
 
-    // ===== Karlix Complaints (Reklamacije) — DEV na https://localhost:5005 =====
-    if (await appManager.FindByClientIdAsync("karlix_qms") is null)
-    {
-        await appManager.CreateAsync(new OpenIddictApplicationDescriptor
-        {
-            ClientId = "karlix_qms",
-            ClientSecret = "super-tajna-rijec-za-dev-qms",
-            DisplayName = "Karlix QMS (Quality Management System)",
-            ClientType = ClientTypes.Confidential,
-            ConsentType = ConsentTypes.Implicit,
-            RedirectUris =
-        {
-            new Uri("https://localhost:5005/signin-oidc")
-        },
-            PostLogoutRedirectUris =
-        {
-            new Uri("https://localhost:5005/")
-        },
-            Permissions =
-        {
-            Permissions.Endpoints.Authorization,
-                Permissions.Endpoints.Token,
-                Permissions.Endpoints.Introspection,
-                // ⚠️ u novijim verzijama: EndSession umjesto Logout
-                Permissions.Endpoints.EndSession,
-
-                Permissions.GrantTypes.AuthorizationCode,
-                Permissions.GrantTypes.RefreshToken,
-                Permissions.ResponseTypes.Code,
-
-                Scopes.OpenId,
-                Scopes.Profile,
-                Scopes.Email,
-                Scopes.Roles,
-                Scopes.OfflineAccess
+            await appManager.CreateAsync(descriptor);
         }
-        });
+        else
+        {
+            var descriptor = new OpenIddictApplicationDescriptor();
+            await appManager.PopulateAsync(descriptor, existing);
+
+            // Osiguraj redirect URI-je (DEV + PROD)
+            var redirectSet = new HashSet<Uri>(descriptor.RedirectUris ?? Enumerable.Empty<Uri>());
+            redirectSet.Add(new Uri("https://localhost:5003/signin-oidc"));
+            redirectSet.Add(new Uri("https://portal.karlix.eu/signin-oidc"));
+            descriptor.RedirectUris.Clear();
+            foreach (var uri in redirectSet) descriptor.RedirectUris.Add(uri);
+
+            // Osiguraj post-logout URI-je
+            var postLogoutSet = new HashSet<Uri>(descriptor.PostLogoutRedirectUris ?? Enumerable.Empty<Uri>());
+            postLogoutSet.Add(new Uri("https://localhost:5003/signout-callback-oidc"));
+            postLogoutSet.Add(new Uri("https://portal.karlix.eu/signout-callback-oidc"));
+            descriptor.PostLogoutRedirectUris.Clear();
+            foreach (var uri in postLogoutSet) descriptor.PostLogoutRedirectUris.Add(uri);
+
+            await appManager.UpdateAsync(existing, descriptor);
+        }
     }
 
+    // ===== Karlix QMS (Web) =====
+    {
+        var existing = await appManager.FindByClientIdAsync("karlix_qms");
 
+        if (existing is null)
+        {
+            var descriptor = new OpenIddictApplicationDescriptor
+            {
+                ClientId = "karlix_qms",
+                ClientSecret = "super-tajna-rijec-za-dev-qms", // PROD: promijeni!
+                DisplayName = "Karlix QMS (Quality Management System)",
+                ClientType = ClientTypes.Confidential,
+                ConsentType = ConsentTypes.Implicit,
+                Permissions =
+                {
+                    Permissions.Endpoints.Authorization,
+                    Permissions.Endpoints.Token,
+                    Permissions.Endpoints.Introspection,
+                    Permissions.Endpoints.EndSession,
+                    Permissions.GrantTypes.AuthorizationCode,
+                    Permissions.GrantTypes.RefreshToken,
+                    Permissions.ResponseTypes.Code,
+                    Scopes.OpenId,
+                    Scopes.Profile,
+                    Scopes.Email,
+                    Scopes.Roles,
+                    Scopes.OfflineAccess
+                }
+            };
+
+            // Dev redirecti
+            descriptor.RedirectUris.Add(new Uri("https://localhost:5005/signin-oidc"));
+            descriptor.PostLogoutRedirectUris.Add(new Uri("https://localhost:5005/signout-callback-oidc"));
+
+            // Prod redirecti – QMS web
+            descriptor.RedirectUris.Add(new Uri("https://qms.karlix.eu/signin-oidc"));
+            descriptor.PostLogoutRedirectUris.Add(new Uri("https://qms.karlix.eu/signout-callback-oidc"));
+
+            await appManager.CreateAsync(descriptor);
+        }
+        else
+        {
+            var descriptor = new OpenIddictApplicationDescriptor();
+            await appManager.PopulateAsync(descriptor, existing);
+
+            // Redirect URIs
+            var redirectSet = new HashSet<Uri>(descriptor.RedirectUris ?? Enumerable.Empty<Uri>());
+            redirectSet.Add(new Uri("https://localhost:5005/signin-oidc"));
+            redirectSet.Add(new Uri("https://qms.karlix.eu/signin-oidc"));
+            descriptor.RedirectUris.Clear();
+            foreach (var uri in redirectSet) descriptor.RedirectUris.Add(uri);
+
+            // Post-logout URIs
+            var postLogoutSet = new HashSet<Uri>(descriptor.PostLogoutRedirectUris ?? Enumerable.Empty<Uri>());
+            postLogoutSet.Add(new Uri("https://localhost:5005/signout-callback-oidc"));
+            postLogoutSet.Add(new Uri("https://qms.karlix.eu/signout-callback-oidc"));
+            descriptor.PostLogoutRedirectUris.Clear();
+            foreach (var uri in postLogoutSet) descriptor.PostLogoutRedirectUris.Add(uri);
+
+            await appManager.UpdateAsync(existing, descriptor);
+        }
+    }
 }
 
 app.Run();
