@@ -8,6 +8,8 @@ using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 using System.Globalization;
 using static OpenIddict.Abstractions.OpenIddictConstants;
+using System.Security.Cryptography.X509Certificates;
+
 
 var builder = WebApplication.CreateBuilder(args);
 var env = builder.Environment;
@@ -112,10 +114,29 @@ builder.Services.AddOpenIddict()
 
         options.RegisterScopes(Scopes.OpenId, Scopes.Profile, Scopes.Email, Scopes.Roles, Scopes.OfflineAccess);
 
-        // Ephemeral ključevi – ne diraju cert store
-        options
-            .AddEphemeralEncryptionKey()
-            .AddEphemeralSigningKey();
+        // ✅ Stabilni ključevi (NE ephemeral)
+        // DEV: koristi development cert (persistira, ne mijenja se na restart)
+        // PROD: koristi PFX cert iz konfiguracije
+        if (isDev)
+        {
+            options
+                .AddDevelopmentEncryptionCertificate()
+                .AddDevelopmentSigningCertificate();
+        }
+        else
+        {
+            // PFX putanja i lozinka iz appsettings.Production.json / env var
+            var certPath = builder.Configuration["OpenIddict:Certificates:Signing:Path"];
+            var certPassword = builder.Configuration["OpenIddict:Certificates:Signing:Password"];
+
+            if (string.IsNullOrWhiteSpace(certPath))
+                throw new InvalidOperationException("Missing OpenIddict signing certificate path (OpenIddict:Certificates:Signing:Path).");
+
+            options
+                .AddEncryptionCertificate(new X509Certificate2(certPath, certPassword))
+                .AddSigningCertificate(new X509Certificate2(certPath, certPassword));
+        }
+
 
         options.UseAspNetCore()
             .EnableAuthorizationEndpointPassthrough()
