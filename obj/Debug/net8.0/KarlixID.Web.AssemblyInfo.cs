@@ -16,7 +16,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("KarlixID.Web")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a5337a589b3697ce25813e8b4c64c762fe67bc1e")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+45a5793f1ade999e911912dc34b9155358f878d7")]
 [assembly: System.Reflection.AssemblyProductAttribute("KarlixID.Web")]
 [assembly: System.Reflection.AssemblyTitleAttribute("KarlixID.Web")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
