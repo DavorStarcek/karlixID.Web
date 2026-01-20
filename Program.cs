@@ -9,7 +9,7 @@ using OpenIddict.Abstractions;
 using System.Globalization;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 using System.Security.Cryptography.X509Certificates;
-
+using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
 var env = builder.Environment;
@@ -125,7 +125,6 @@ builder.Services.AddOpenIddict()
         }
         else
         {
-            // PFX putanja i lozinka iz appsettings.Production.json / env var
             var certPath = builder.Configuration["OpenIddict:Certificates:Signing:Path"];
             var certPassword = builder.Configuration["OpenIddict:Certificates:Signing:Password"];
 
@@ -136,7 +135,6 @@ builder.Services.AddOpenIddict()
                 .AddEncryptionCertificate(new X509Certificate2(certPath, certPassword))
                 .AddSigningCertificate(new X509Certificate2(certPath, certPassword));
         }
-
 
         options.UseAspNetCore()
             .EnableAuthorizationEndpointPassthrough()
@@ -165,12 +163,10 @@ app.UseRequestLocalization(new RequestLocalizationOptions
 // umjesto if (!isDev) -> koristimo showDevErrors
 if (showDevErrors)
 {
-    // DEV ili ASPNETCORE_DETAILEDERRORS=true → full stack
     app.UseDeveloperExceptionPage();
 }
 else
 {
-    // klasični production handling
     app.UseExceptionHandler("/Home/Error");
     app.UseHsts();
 }
@@ -202,14 +198,96 @@ using (var scope = app.Services.CreateScope())
 
     // context.Database.Migrate(); // ako želiš
 
-    // Role
-    if (!await roleManager.RoleExistsAsync(AppRoleInfo.GlobalAdmin))
-        await roleManager.CreateAsync(new IdentityRole(AppRoleInfo.GlobalAdmin));
+    // --------------------------
+    // Helperi za seed
+    // --------------------------
+    static async Task<IdentityRole> EnsureRoleAsync(RoleManager<IdentityRole> rm, string roleName)
+    {
+        var role = await rm.FindByNameAsync(roleName);
+        if (role != null) return role;
 
-    if (!await roleManager.RoleExistsAsync(AppRoleInfo.TenantAdmin))
-        await roleManager.CreateAsync(new IdentityRole(AppRoleInfo.TenantAdmin));
+        var create = await rm.CreateAsync(new IdentityRole(roleName));
+        if (!create.Succeeded)
+        {
+            var msg = string.Join("; ", create.Errors.Select(e => $"{e.Code}:{e.Description}"));
+            throw new InvalidOperationException($"Ne mogu kreirati rolu '{roleName}': {msg}");
+        }
 
-    // GlobalAdmin
+        role = await rm.FindByNameAsync(roleName)
+               ?? throw new InvalidOperationException($"Rola '{roleName}' je kreirana ali nije pronađena nakon toga.");
+        return role;
+    }
+
+    static async Task EnsureRolePermAsync(RoleManager<IdentityRole> rm, IdentityRole role, string perm)
+    {
+        // koristimo ClaimType="perm" (standard za permissions)
+        var existing = await rm.GetClaimsAsync(role);
+        if (existing.Any(c => c.Type == "perm" && string.Equals(c.Value, perm, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        var add = await rm.AddClaimAsync(role, new Claim("perm", perm));
+        if (!add.Succeeded)
+        {
+            var msg = string.Join("; ", add.Errors.Select(e => $"{e.Code}:{e.Description}"));
+            throw new InvalidOperationException($"Ne mogu dodati perm '{perm}' roli '{role.Name}': {msg}");
+        }
+    }
+
+    // --------------------------
+    // 1) Roles
+    // --------------------------
+    var globalAdminRole = await EnsureRoleAsync(roleManager, AppRoleInfo.GlobalAdmin);
+    var tenantAdminRole = await EnsureRoleAsync(roleManager, AppRoleInfo.TenantAdmin);
+    var tenantUserRole = await EnsureRoleAsync(roleManager, AppRoleInfo.TenantUser);
+
+    // --------------------------
+    // 2) QMS Permissions (Option B: odvojeno RIN/UN)
+    // --------------------------
+    // TenantUser: read-only perms
+    var qmsTenantUserPerms = new[]
+    {
+        "qms.read",
+        "qms.actions.read"
+    };
+
+    // TenantAdmin + GlobalAdmin: full perms
+    var qmsAllPerms = new[]
+    {
+        // read
+        "qms.read",
+        "qms.actions.read",
+
+        // actions
+        "qms.actions.write.basic",
+        "qms.actions.verify",
+        "qms.actions.write.all",
+
+        // RIN phase writes
+        "qms.rin.write.RECEIVED",
+        "qms.rin.write.IN_PROGRESS",
+        "qms.rin.write.CLOSED",
+
+        // UN phase writes
+        "qms.un.write.RECEIVED",
+        "qms.un.write.IN_PROGRESS",
+        "qms.un.write.CLOSED",
+
+        // admin
+        "qms.admin"
+    };
+
+    foreach (var p in qmsTenantUserPerms)
+        await EnsureRolePermAsync(roleManager, tenantUserRole, p);
+
+    foreach (var p in qmsAllPerms)
+        await EnsureRolePermAsync(roleManager, tenantAdminRole, p);
+
+    foreach (var p in qmsAllPerms)
+        await EnsureRolePermAsync(roleManager, globalAdminRole, p);
+
+    // --------------------------
+    // 3) GlobalAdmin user (seed)
+    // --------------------------
     var globalAdmin = await userManager.FindByEmailAsync("admin@karlix.eu");
     if (globalAdmin == null)
     {
@@ -226,7 +304,9 @@ using (var scope = app.Services.CreateScope())
             await userManager.AddToRoleAsync(user, AppRoleInfo.GlobalAdmin);
     }
 
-    // (Opcionalno) TenantAdmin za 'localhost'
+    // --------------------------
+    // 4) (Opcionalno) TenantAdmin za 'localhost'
+    // --------------------------
     var localhostTenant = context.Tenants.FirstOrDefault(t => t.Hostname == "localhost");
     if (localhostTenant != null)
     {

@@ -1,25 +1,27 @@
-﻿using Microsoft.AspNetCore;
+﻿using KarlixID.Web.Data;
+using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 using OpenIddict.Server.AspNetCore;
-using System.Security.Claims;
 using System.Linq;
+using System.Security.Claims;
 using static OpenIddict.Abstractions.OpenIddictConstants;
-using KarlixID.Web.Data;
-using Microsoft.EntityFrameworkCore;
 
 namespace KarlixID.Web.Controllers
 {
     public class AuthorizationController : Controller
     {
         private readonly ApplicationDbContext _db;
+        private readonly UserManager<Models.ApplicationUser> _userManager;
 
-        public AuthorizationController(ApplicationDbContext db)
+        public AuthorizationController(ApplicationDbContext db, UserManager<Models.ApplicationUser> userManager)
         {
             _db = db;
+            _userManager = userManager;
         }
 
         // GET/POST /connect/authorize
@@ -33,7 +35,6 @@ namespace KarlixID.Web.Controllers
             // Ako nije prijavljen → redirect na login i vrati se natrag na ovaj authorize zahtjev
             if (!(User?.Identity?.IsAuthenticated ?? false))
             {
-                // pripremi parametre (query ili form) u točnom nullable obliku
                 IEnumerable<KeyValuePair<string, string?>> pairs =
                     Request.HasFormContentType
                         ? Request.Form.Select(kv => new KeyValuePair<string, string?>(kv.Key, kv.Value.ToString()))
@@ -101,6 +102,83 @@ namespace KarlixID.Web.Controllers
                 }
             }
 
+            // =========================================================
+            // ✅ PERMISSIONS (perm claims) – iz Identity tablica
+            // =========================================================
+            // Standard: perm claims držiš u AspNetRoleClaims i/ili AspNetUserClaims:
+            //  - ClaimType = "perm"
+            //  - ClaimValue = "qms.rin.write.RECEIVED" itd.
+            //
+            // API će kasnije raditi policies po "perm".
+            //
+            // Napomena: perm claimove stavljamo u ACCESS TOKEN jer je to bitno za API.
+            // Identity token nije nužan za ovo; ako želiš, možeš dodati i tamo.
+            // =========================================================
+
+            // Dohvati user iz baze (da imamo UserId za AspNetUserClaims)
+            // sub kod tebe je IdentityUser.Id (string), jer koristiš IdentityOptions sub mapping.
+            var appUser = await _userManager.FindByIdAsync(sub);
+
+            // permissions set (dedupe)
+            var perms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // 1) RoleClaims -> perm
+            var roleNames = User.Claims
+                .Where(c => c.Type == ClaimTypes.Role)
+                .Select(c => c.Value)
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (roleNames.Count > 0)
+            {
+                // AspNetRoles: Id (string), Name
+                var roleIds = await _db.Roles
+                    .AsNoTracking()
+                    .Where(r => roleNames.Contains(r.Name!))
+                    .Select(r => r.Id)
+                    .ToListAsync();
+
+                if (roleIds.Count > 0)
+                {
+                    var rolePerms = await _db.RoleClaims
+                        .AsNoTracking()
+                        .Where(rc => roleIds.Contains(rc.RoleId) && rc.ClaimType == "perm")
+                        .Select(rc => rc.ClaimValue)
+                        .ToListAsync();
+
+                    foreach (var p in rolePerms)
+                    {
+                        if (!string.IsNullOrWhiteSpace(p))
+                            perms.Add(p.Trim());
+                    }
+                }
+            }
+
+            // 2) UserClaims -> perm (override/extra)
+            if (appUser != null)
+            {
+                var userPerms = await _db.UserClaims
+                    .AsNoTracking()
+                    .Where(uc => uc.UserId == appUser.Id && uc.ClaimType == "perm")
+                    .Select(uc => uc.ClaimValue)
+                    .ToListAsync();
+
+                foreach (var p in userPerms)
+                {
+                    if (!string.IsNullOrWhiteSpace(p))
+                        perms.Add(p.Trim());
+                }
+            }
+
+            // 3) Emit perm claims
+            // U access token (za API). Ako želiš i u identity token, dodaj i Destinations.IdentityToken.
+            foreach (var p in perms.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                identity.AddClaim(new Claim("perm", p)
+                    .SetDestinations(Destinations.AccessToken));
+            }
+
             // Scope-ovi iz zahtjeva ili default
             var requested = request.GetScopes(); // ImmutableArray<string>
             var scopes = !requested.IsDefaultOrEmpty
@@ -118,10 +196,7 @@ namespace KarlixID.Web.Controllers
         [IgnoreAntiforgeryToken]
         public async Task<IActionResult> Logout()
         {
-            // Odjava korisnika iz KarlixID (Identity cookie)
             await HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
-
-            // OpenIddict server rješava redirect natrag na klijenta (post_logout_redirect_uri)
             return SignOut(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         }
 

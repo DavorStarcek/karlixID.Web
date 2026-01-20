@@ -4,5 +4,6 @@
     {
         public const string GlobalAdmin = "GlobalAdmin";
         public const string TenantAdmin = "TenantAdmin";
+        public const string TenantUser = "TenantUser";
     }
 }
