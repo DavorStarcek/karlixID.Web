@@ -16,27 +16,21 @@ namespace KarlixID.Web.Controllers
     public class AuthorizationController : Controller
     {
         private readonly ApplicationDbContext _db;
-        private readonly UserManager<ApplicationUser> _userManager;
-        private readonly RoleManager<IdentityRole> _roleManager;
 
-        public AuthorizationController(
-            ApplicationDbContext db,
-            UserManager<ApplicationUser> userManager,
-            RoleManager<IdentityRole> roleManager)
+        public AuthorizationController(ApplicationDbContext db)
         {
             _db = db;
-            _userManager = userManager;
-            _roleManager = roleManager;
         }
 
         // GET/POST /connect/authorize
         [HttpGet("~/connect/authorize"), HttpPost("~/connect/authorize")]
-        [IgnoreAntiforgeryToken]
+        [IgnoreAntiforgeryToken] // OIDC middleware rješava CSRF
         public async Task<IActionResult> Authorize()
         {
             var request = HttpContext.GetOpenIddictServerRequest()
                           ?? throw new InvalidOperationException("OIDC request unavailable.");
 
+            // Ako nije prijavljen → redirect na login i vrati se natrag na ovaj authorize zahtjev
             if (!(User?.Identity?.IsAuthenticated ?? false))
             {
                 IEnumerable<KeyValuePair<string, string?>> pairs =
@@ -52,16 +46,26 @@ namespace KarlixID.Web.Controllers
                 );
             }
 
-            // Složi OpenIddict identity
+            // Složi OpenIddict identity (schema mora biti OpenIddict server)
             var identity = new ClaimsIdentity(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
 
-            var sub = User.FindFirstValue(Claims.Subject)
-                      ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
-                      ?? User.Identity!.Name
-                      ?? throw new InvalidOperationException("Missing subject.");
+            // sub/name/email
+            // Kod tebe je NameIdentifier mapiran na "sub" (OpenIddict Claims.Subject) kroz IdentityOptions,
+            // pa ovdje uzimamo najstabilnije što postoji.
+            var sub =
+                User.FindFirstValue(Claims.Subject) ??
+                User.FindFirstValue(ClaimTypes.NameIdentifier) ??
+                User.Identity!.Name ??
+                throw new InvalidOperationException("User subject is missing.");
 
-            var name = User.FindFirstValue(Claims.Name) ?? User.Identity!.Name ?? sub;
-            var email = User.FindFirstValue(Claims.Email) ?? User.FindFirstValue(ClaimTypes.Email);
+            var name =
+                User.FindFirstValue(Claims.Name) ??
+                User.Identity!.Name ??
+                sub;
+
+            var email =
+                User.FindFirstValue(Claims.Email) ??
+                User.FindFirstValue(ClaimTypes.Email);
 
             identity.AddClaim(new Claim(Claims.Subject, sub)
                 .SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
@@ -69,19 +73,20 @@ namespace KarlixID.Web.Controllers
             identity.AddClaim(new Claim(Claims.Name, name)
                 .SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
 
-            if (!string.IsNullOrEmpty(email))
+            if (!string.IsNullOrWhiteSpace(email))
             {
                 identity.AddClaim(new Claim(Claims.Email, email)
                     .SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
             }
 
-            // ==========================
-            // ✅ ROLES: fix (role claim type je "role", ne ClaimTypes.Role)
-            // ==========================
+            // ------------------------------------------------------------
+            // ROLES: pokupi i ClaimTypes.Role i "role"
+            // ------------------------------------------------------------
             var roleValues = User.Claims
                 .Where(c =>
+                    string.Equals(c.Type, ClaimTypes.Role, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(c.Type, Claims.Role, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(c.Type, ClaimTypes.Role, StringComparison.OrdinalIgnoreCase))
+                    string.Equals(c.Type, "role", StringComparison.OrdinalIgnoreCase))
                 .Select(c => c.Value)
                 .Where(v => !string.IsNullOrWhiteSpace(v))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -93,66 +98,42 @@ namespace KarlixID.Web.Controllers
                     .SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
             }
 
-            // ==========================
-            // ✅ PERMISSIONS: povuci iz RoleClaims (ClaimType="perm")
-            // ==========================
-            // (a) Load user from DB to be safe
-            var appUser = await _userManager.FindByIdAsync(sub);
-            if (appUser != null)
+            // ------------------------------------------------------------
+            // PERMISSIONS: podrži "perm" i "permission"
+            // U tokenu emitiramo "perm" (da bude konzistentno s tvojim QMS API očekivanjem)
+            // ------------------------------------------------------------
+            const string TokenPermClaimType = "perm";
+
+            var permValues = User.Claims
+                .Where(c =>
+                    string.Equals(c.Type, TokenPermClaimType, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(c.Type, "permission", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(c.Type, AppPermissionInfo.PermissionClaimType, StringComparison.OrdinalIgnoreCase))
+                .Select(c => c.Value)
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var p in permValues)
             {
-                // Roles from store (authoritative)
-                var storeRoles = await _userManager.GetRolesAsync(appUser);
-
-                var permSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                foreach (var roleName in storeRoles)
-                {
-                    var role = await _roleManager.FindByNameAsync(roleName);
-                    if (role == null) continue;
-
-                    var claims = await _roleManager.GetClaimsAsync(role);
-                    foreach (var c in claims)
-                    {
-                        if (string.Equals(c.Type, AppPermissionInfo.PermissionClaimType, StringComparison.OrdinalIgnoreCase) &&
-                            !string.IsNullOrWhiteSpace(c.Value))
-                        {
-                            permSet.Add(c.Value);
-                        }
-                    }
-                }
-
-                // (b) Optional: user-level perm overrides (AspNetUserClaims)
-                var userClaims = await _userManager.GetClaimsAsync(appUser);
-                foreach (var c in userClaims)
-                {
-                    if (string.Equals(c.Type, AppPermissionInfo.PermissionClaimType, StringComparison.OrdinalIgnoreCase) &&
-                        !string.IsNullOrWhiteSpace(c.Value))
-                    {
-                        permSet.Add(c.Value);
-                    }
-                }
-
-                foreach (var perm in permSet)
-                {
-                    // perm treba samo API-ju => AccessToken je dosta
-                    identity.AddClaim(new Claim(AppPermissionInfo.PermissionClaimType, perm)
-                        .SetDestinations(Destinations.AccessToken));
-                }
+                identity.AddClaim(new Claim(TokenPermClaimType, p)
+                    .SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
             }
 
-            // ==========================
-            // TENANT CLAIM
-            // ==========================
+            // ------------------------------------------------------------
+            // TENANT CLAIM – GUID
+            // ------------------------------------------------------------
             var tenantClaim =
-                User.Claims.FirstOrDefault(c => c.Type == "tenant")
-                ?? User.Claims.FirstOrDefault(c => c.Type == "tenant_id")
-                ?? User.Claims.FirstOrDefault(c => c.Type == "tenant:name");
+                User.Claims.FirstOrDefault(c => c.Type == "tenant") ??
+                User.Claims.FirstOrDefault(c => c.Type == "tenant_id") ??
+                User.Claims.FirstOrDefault(c => c.Type == "tenant:name");
 
             if (tenantClaim is not null && !string.IsNullOrWhiteSpace(tenantClaim.Value))
             {
                 identity.AddClaim(new Claim("tenant", tenantClaim.Value)
                     .SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
 
+                // Tenant name (ako postoji u bazi)
                 if (Guid.TryParse(tenantClaim.Value, out var tenantId) && tenantId != Guid.Empty)
                 {
                     var tenantEntity = await _db.Tenants
@@ -167,11 +148,11 @@ namespace KarlixID.Web.Controllers
                 }
             }
 
-            // Scope-ovi
+            // Scope-ovi iz zahtjeva ili default
             var requested = request.GetScopes();
             var scopes = !requested.IsDefaultOrEmpty
                 ? requested.ToArray()
-                : new[] { Scopes.OpenId, Scopes.Profile, Scopes.Email };
+                : new[] { Scopes.OpenId, Scopes.Profile, Scopes.Email, Scopes.Roles };
 
             identity.SetScopes(scopes);
 
@@ -179,6 +160,7 @@ namespace KarlixID.Web.Controllers
             return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         }
 
+        // POST/GET /connect/logout – end-session endpoint za SSO logout
         [HttpGet("~/connect/logout"), HttpPost("~/connect/logout")]
         [IgnoreAntiforgeryToken]
         public async Task<IActionResult> Logout()
@@ -187,15 +169,19 @@ namespace KarlixID.Web.Controllers
             return SignOut(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         }
 
+        // GET /connect/userinfo (informativno)
         [HttpGet("~/connect/userinfo")]
         [Authorize]
         public IActionResult Userinfo()
         {
             var claims = new Dictionary<string, object?>
             {
-                [Claims.Subject] = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.Identity?.Name,
-                [Claims.Name] = User.Identity?.Name,
-                [Claims.Email] = User.FindFirstValue(ClaimTypes.Email)
+                [Claims.Subject] = User.FindFirstValue(Claims.Subject) ?? User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.Identity?.Name,
+                [Claims.Name] = User.FindFirstValue(Claims.Name) ?? User.Identity?.Name,
+                [Claims.Email] = User.FindFirstValue(Claims.Email) ?? User.FindFirstValue(ClaimTypes.Email),
+                ["tenant"] = User.FindFirstValue("tenant") ?? User.FindFirstValue("tenant_id"),
+                ["perm"] = User.Claims.Where(c => c.Type == "perm").Select(c => c.Value).ToArray(),
+                [Claims.Role] = User.Claims.Where(c => c.Type == Claims.Role || c.Type == ClaimTypes.Role || c.Type == "role").Select(c => c.Value).ToArray()
             };
             return Ok(claims);
         }
