@@ -726,3 +726,4 @@ C:\Users\dstarcek\Desktop\KarlixEU projekti\KarlixID\obj\Debug\net8.0\refint\Kar
 C:\Users\dstarcek\Desktop\KarlixEU projekti\KarlixID\obj\Debug\net8.0\KarlixID.Web.pdb
 C:\Users\dstarcek\Desktop\KarlixEU projekti\KarlixID\obj\Debug\net8.0\KarlixID.Web.genruntimeconfig.cache
 C:\Users\dstarcek\Desktop\KarlixEU projekti\KarlixID\obj\Debug\net8.0\ref\KarlixID.Web.dll
+C:\Users\dstarcek\Desktop\KarlixEU projekti\KarlixID\obj\Debug\net8.0\swae.build.ex.cache
