@@ -8,6 +8,7 @@ This repository is `KarlixID.Web` only.
 - Default build command: `dotnet build .\KarlixID.Web.csproj`
 - Do not run the application without explicit permission.
 - Do not connect to production or remote databases.
+- Do not modify secrets unless explicitly requested.
 
 ## Sensitive Areas
 
